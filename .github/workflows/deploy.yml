@@ -16,7 +16,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: eu-central-1
+          aws-region: us-east-1
 
       - name: Login to ECR
         id: login-ecr
@@ -38,4 +38,4 @@ jobs:
           aws lambda update-function-code \
             --function-name textile-defect \
             --image-uri $ECR_REGISTRY/textile-defect:latest \
-            --region eu-central-1
+            --region us-east-1
