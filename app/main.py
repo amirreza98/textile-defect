@@ -3,9 +3,9 @@ import base64
 import boto3
 import os
 import uuid
+import glob
 from ultralytics import YOLO
 
-# Load model once when Lambda starts (not on every request)
 model = YOLO("/app/best.pt")
 
 s3 = boto3.client('s3')
@@ -13,13 +13,15 @@ BUCKET_NAME = os.environ.get('S3_BUCKET_NAME')
 
 def handler(event, context):
     try:
-        # Get image from request
-        body = json.loads(event['body'])
+        # Handle both direct and API Gateway calls
+        if isinstance(event.get('body'), str):
+            body = json.loads(event['body'])
+        else:
+            body = event.get('body', event)
+
         image_data = base64.b64decode(body['image'])
         
-        # Save temp image
         temp_input = f"/tmp/input_{uuid.uuid4()}.jpg"
-        temp_output = f"/tmp/output_{uuid.uuid4()}.jpg"
         
         with open(temp_input, 'wb') as f:
             f.write(image_data)
@@ -30,32 +32,39 @@ def handler(event, context):
             conf=0.25,
             save=True,
             project="/tmp",
-            name="results"
+            name="results",
+            exist_ok=True
         )
         
-        # Get detection info
+        # Get detections
         detections = []
         for r in results:
             for box in r.boxes:
                 detections.append({
                     'class': model.names[int(box.cls)],
                     'confidence': float(box.conf),
-                    'bbox': box.xyxy[0].tolist()
                 })
         
-        # Upload result image to S3
-        result_image_path = f"/tmp/results/{os.path.basename(temp_input)}"
-        image_key = f"results/{uuid.uuid4()}.jpg"
+        # Find saved result image
+        saved_files = glob.glob("/tmp/results/*.jpg")
+        result_image_path = saved_files[0] if saved_files else temp_input
         
+        # Upload to S3
+        image_key = f"results/{uuid.uuid4()}.jpg"
         s3.upload_file(result_image_path, BUCKET_NAME, image_key)
         
-        # Generate public URL
         image_url = f"https://{BUCKET_NAME}.s3.amazonaws.com/{image_key}"
         
+        # Cleanup
+        os.remove(temp_input)
+        if saved_files:
+            os.remove(saved_files[0])
+
         return {
             'statusCode': 200,
             'headers': {
                 'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Headers': 'content-type',
                 'Content-Type': 'application/json'
             },
             'body': json.dumps({
@@ -68,5 +77,13 @@ def handler(event, context):
     except Exception as e:
         return {
             'statusCode': 500,
-            'body': json.dumps({'error': str(e)})
+            'headers': {
+                'Access-Control-Allow-Origin': '*',
+                'Content-Type': 'application/json'
+            },
+            'body': json.dumps({
+                'error': str(e),
+                'detections': [],
+                'total_defects': 0
+            })
         }
